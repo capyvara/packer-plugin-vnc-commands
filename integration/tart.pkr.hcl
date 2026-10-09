@@ -18,6 +18,10 @@ variable "base_vm" {
 variable "test_vm" {
   type = string
 }
+variable "debug_pause" {
+  type    = bool
+  default = false
+}
 variable "ssh_username" {
   type    = string
   default = "admin"
@@ -36,7 +40,7 @@ variable "vnc_password" {
 source "tart-cli" "test" {
   vm_base_name       = var.base_vm
   vm_name            = var.test_vm
-  headless           = true
+  headless           = false
   disable_vnc        = true
   recovery_partition = "keep"
   cpu_count          = 4
@@ -53,15 +57,27 @@ build {
       "MACHINE_PASSWORD=${var.ssh_password}",
       "VNC_PASSWORD=${var.vnc_password}",
     ]
+    script  = "integration/configure-screen-sharing.sh"
+    timeout = "2m"
+  }
+
+  provisioner "shell" {
     script  = "integration/prepare-terminal.sh"
     timeout = "2m"
   }
 
+  provisioner "breakpoint" {
+    disable = !var.debug_pause
+    note    = "Before the VNC marker command: inspect Terminal and dismiss any modal dialog. Continue only when the fresh shell prompt has keyboard focus."
+  }
+
   provisioner "vnc-commands" {
-    host            = build.Host
-    password        = var.vnc_password
-    commands        = ["<wait2s>", "printf '%s' 'vnc-commands-ok' > /tmp/vnc-commands-marker<enter>"]
-    key_interval    = "30ms"
+    host     = build.Host
+    password = var.vnc_password
+    # Screen Sharing's connection notification temporarily takes keyboard focus.
+    # Wait after connecting, and let the last keys settle before disconnecting.
+    commands        = ["<wait10s>", "printf '%s' 'vnc-commands-ok' > /tmp/vnc-commands-marker<enter>", "<wait2s>"]
+    key_interval    = "100ms"
     connect_timeout = "30s"
     timeout         = "2m"
   }

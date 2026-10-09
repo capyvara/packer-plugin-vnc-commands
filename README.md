@@ -50,7 +50,7 @@ build {
     host            = build.Host
     port            = 5900
     password        = var.vnc_password
-    commands        = ["<wait2s>", "echo ready > /tmp/vnc-ready<enter>", "<wait2s>"]
+    commands        = ["<wait10s>", "echo ready > /tmp/vnc-ready<enter>", "<wait2s>"]
     key_interval    = "100ms"
     connect_timeout = "30s"
     timeout         = "2m"
@@ -61,6 +61,8 @@ build {
   }
 }
 ```
+
+On macOS, Screen Sharing's “Your screen is being controlled” notification can temporarily take keyboard focus when a VNC client connects. Start `commands` with `<wait10s>` to let it disappear before sending keys. This wait happens after the VNC handshake; Packer's `pause_before` happens before connecting and cannot cover the notification. A trailing `<wait2s>` gives the guest time to process the final keys before the disconnect notification appears. Adjust these waits for your guest.
 
 See [examples/basic.pkr.hcl](examples/basic.pkr.hcl) and [examples/legacy.json](examples/legacy.json). The null-builder examples are for validation; building requires a real SSH/VNC guest.
 
@@ -102,15 +104,17 @@ Install [Mise](https://mise.jdx.dev/), then run `mise install`. Tool versions ar
 
 ## Local Tart integration
 
-Requires macOS on Apple Silicon, a cached stopped `macos-base` VM, SSH with password authentication, a logged-in graphical session for the SSH user, and working Screen Sharing configured on the base. The default guest credentials are `admin`/`admin`. AppleScript must be able to open and focus Terminal in that session.
+Requires macOS on Apple Silicon, a cached stopped `macos-base` VM, SSH with password authentication, an unlocked graphical session for the SSH user, and working Screen Sharing configured on the base. The default guest credentials are `admin`/`admin`. The test opens a fresh Terminal session through LaunchServices and waits for it to start.
 
 ```sh
 mise run integration:tart
+# Pause before each VNC step to inspect focus and modal dialogs:
+TART_DEBUG_PAUSE=true mise run integration:tart
 # Optional overrides:
 TART_BASE_VM=another-cached-base TART_SSH_USERNAME=admin TART_SSH_PASSWORD=admin mise run integration:tart
 ```
 
-The task generates a unique test VM name and lets Packer clone the base. It retains Screen Sharing, configures classic VNC password access on the clone, focuses Terminal with a shell step, types a marker command through this provisioner, and verifies exact marker bytes over SSH with a 30-second deadline. The task's trap deletes only its generated test VM. The base is unchanged. `TART_VNC_PASSWORD` overrides the test password (default `vnctest`); it is a disposable test credential. This integration runs locally, without a dedicated CI runner.
+The task generates a unique test VM name and lets Packer clone the base. It opens a Tart window, keeps the display awake, retains Screen Sharing, and configures classic VNC password access and control privileges on the clone. A shell step prepares Terminal; the VNC step waits ten seconds after connecting, types the marker command, then waits two seconds before disconnecting. The final shell step verifies exact marker bytes over SSH with a 30-second deadline. The task's trap deletes only its generated test VM. The base is unchanged. `TART_VNC_PASSWORD` overrides the VNC test password (default `vnctest`); it is a disposable test credential. This integration runs locally, without a dedicated CI runner.
 
 ## Releases
 

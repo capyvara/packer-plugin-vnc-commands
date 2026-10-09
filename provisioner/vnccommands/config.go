@@ -32,7 +32,10 @@ func (p *Provisioner) Prepare(raws ...interface{}) error {
 		Interpolate: true, InterpolateContext: &p.interp,
 		InterpolateFilter: &interpolate.RenderFilter{Exclude: []string{"host", "password", "commands"}},
 	}, raws...); err != nil {
-		return fmt.Errorf("decode VNC configuration: %w", err)
+		// SDK interpolation errors append the original field value after
+		// this delimiter. Preserve the diagnostic without echoing that value.
+		message := strings.SplitN(err.Error(), " in:\n\n", 2)[0]
+		return fmt.Errorf("decode VNC configuration: %s", message)
 	}
 	if p.config.KeyInterval == nil {
 		interval := 100 * time.Millisecond

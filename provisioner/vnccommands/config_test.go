@@ -40,6 +40,7 @@ func TestInvalidConfiguration(t *testing.T) {
 		{"timeout invalid", "connect_timeout", "nope", "connect_timeout"},
 		{"invalid SDK wait", "commands", []string{"sensitive-text<wait0s>"}, "positive"},
 		{"unknown field", "typo", true, "unknown configuration"},
+		{"template syntax", "commands", []string{"sensitive-text{{"}, "commands"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := map[string]interface{}{"host": "localhost", "commands": []string{"hi"}}

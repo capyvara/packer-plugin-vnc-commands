@@ -3,6 +3,7 @@ package vnccommands
 import (
 	"context"
 	"errors"
+	"net"
 	"reflect"
 	"strings"
 	"testing"
@@ -160,4 +161,54 @@ func TestDisconnectInterruptsWait(t *testing.T) {
 		t.Fatalf("unexpected disconnect error: %v", err)
 	}
 	s.awaitClosed(t)
+}
+
+func TestDisconnectStopsTyping(t *testing.T) {
+	s := startRFB(t, rfbOptions{disconnectAfter: 1})
+	p := configured(t, s, map[string]interface{}{"commands": []string{strings.Repeat("a", 100)}, "key_interval": "10ms"})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := p.Provision(ctx, new(packer.MockUi), nil, nil)
+	if err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("disconnect did not stop typing: %v", err)
+	}
+	s.awaitClosed(t)
+	if len(s.events) != 1 {
+		t.Fatal("unexpected events after disconnect")
+	}
+}
+
+func TestConnectionRefused(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().(*net.TCPAddr)
+	listener.Close()
+	p := new(Provisioner)
+	if err := p.Prepare(map[string]interface{}{"host": "127.0.0.1", "port": address.Port, "commands": []string{"a"}}); err != nil {
+		t.Fatal(err)
+	}
+	err = p.Provision(context.Background(), new(packer.MockUi), nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "connect to VNC at 127.0.0.1:") {
+		t.Fatalf("unexpected connection error: %v", err)
+	}
+}
+
+func TestRuntimeValuesOnWire(t *testing.T) {
+	s := startRFB(t, rfbOptions{password: "secret"})
+	p := configured(t, s, map[string]interface{}{"host": "{{.Host}}", "password": "{{.Password}}", "commands": []string{"{{.Text}}", "<enter>"}})
+	err := p.Provision(context.Background(), new(packer.MockUi), nil, map[string]interface{}{"Host": s.host, "Password": "secret", "Text": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.awaitClosed(t)
+	var got []keyEvent
+	for len(s.events) > 0 {
+		got = append(got, <-s.events)
+	}
+	want := []keyEvent{{'x', true}, {'x', false}, {0xff0d, true}, {0xff0d, false}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("runtime events: got %v, want %v", got, want)
+	}
 }
