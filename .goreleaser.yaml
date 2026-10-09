@@ -1,0 +1,36 @@
+version: 2
+project_name: packer-plugin-vnc-commands
+
+builds:
+  - id: plugin
+    main: .
+    binary: '{{ .ProjectName }}_v{{ .Version }}_{{ .Env.PACKER_PLUGIN_API_VERSION }}_{{ .Os }}_{{ .Arch }}'
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - '-s -w -X main.pluginVersion={{ .Version }}'
+
+archives:
+  - id: plugin
+    ids: [plugin]
+    formats: [zip]
+    name_template: '{{ .ProjectName }}_v{{ .Version }}_{{ .Env.PACKER_PLUGIN_API_VERSION }}_{{ .Os }}_{{ .Arch }}'
+    files: [LICENSE, README.md]
+
+checksum:
+  name_template: '{{ .ProjectName }}_v{{ .Version }}_SHA256SUMS'
+  algorithm: sha256
+
+snapshot:
+  version_template: '{{ .Version }}-dev'
+
+release:
+  github:
+    owner: capyvara
+    name: packer-plugin-vnc-commands
+
+changelog:
+  use: git

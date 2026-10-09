@@ -1,0 +1,54 @@
+[tools]
+go = "1.26.8"
+goreleaser = "2.18.3"
+packer = "1.16.1"
+
+[env]
+GOMODCACHE = "{{config_root}}/.cache/go-mod"
+GOCACHE = "{{config_root}}/.cache/go-build"
+
+[tasks.generate]
+description = "Generate HCL schema with the pinned Packer SDK"
+run = "go generate ./provisioner/vnccommands"
+
+[tasks.fmt]
+description = "Format Go and Packer sources"
+run = ["gofmt -w main.go provisioner/vnccommands", "packer fmt -recursive examples integration"]
+
+[tasks.test]
+description = "Run race-enabled configuration and RFB protocol tests"
+run = "go test -race -count=1 ./..."
+
+[tasks.build]
+description = "Build the development plugin"
+run = "go build -trimpath -o bin/packer-plugin-vnc-commands ."
+
+[tasks.install]
+description = "Install the local development plugin into Packer"
+depends = ["build"]
+run = "packer plugins install --path bin/packer-plugin-vnc-commands github.com/capyvara/vnc-commands"
+
+[tasks.check]
+description = "Check formatting, generated schema, vet, tests, and Packer discovery"
+run = "bash scripts/check.sh"
+
+[tasks."integration:tart"]
+description = "Test shell/VNC/shell provisioning on a disposable macOS VM"
+tools = { tart = "2.40.1" }
+depends = ["build"]
+run = "bash scripts/integration-tart.sh"
+
+[tasks."release:snapshot"]
+description = "Build and verify all six Packer release ZIPs without publishing"
+depends = ["build"]
+run = "bash scripts/release.sh snapshot"
+
+[tasks.release]
+description = "Publish a validated version tag using GoReleaser"
+depends = ["build"]
+run = "bash scripts/release.sh release"
+
+[tasks."release:verify-install"]
+description = "Verify packer init installs the published v0.1.0 release"
+run = "bash scripts/verify-release-install.sh"
+

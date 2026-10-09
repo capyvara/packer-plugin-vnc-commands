@@ -1,0 +1,19 @@
+{
+  "variables": {
+    "vnc_host": "127.0.0.1",
+    "vnc_password": ""
+  },
+  "builders": [{
+    "type": "null",
+    "ssh_host": "{{user `vnc_host`}}",
+    "ssh_username": "admin",
+    "ssh_password": "admin"
+  }],
+  "provisioners": [{
+    "type": "vnc-commands",
+    "host": "{{.Host}}",
+    "password": "{{user `vnc_password`}}",
+    "commands": ["hello", "<enter><wait2s>"],
+    "timeout": "2m"
+  }]
+}
