@@ -13,7 +13,7 @@ func TestPrepareDefaults(t *testing.T) {
 	if err := p.Prepare(map[string]interface{}{"host": "::1", "commands": []string{"hello", "<enter>"}}); err != nil {
 		t.Fatal(err)
 	}
-	if *p.config.Port != 5900 || p.config.Password != "" || *p.config.KeyInterval != 100*time.Millisecond || *p.config.ConnectTimeout != 30*time.Second {
+	if *p.config.Port != 5900 || p.config.Username != "" || p.config.Password != "" || *p.config.KeyInterval != 100*time.Millisecond || *p.config.ConnectTimeout != 30*time.Second {
 		t.Fatalf("unexpected defaults: %+v", p.config)
 	}
 }
@@ -59,21 +59,21 @@ func TestInvalidConfiguration(t *testing.T) {
 func TestRuntimeConfiguration(t *testing.T) {
 	p := new(Provisioner)
 	err := p.Prepare(map[string]interface{}{
-		"host": "{{.Host}}", "password": "{{user `vnc_password`}}",
+		"host": "{{.Host}}", "username": "{{.Username}}", "password": "{{user `vnc_password`}}",
 		"commands":              []string{"{{user `prefix`}}", "{{.Name}}<enter>"},
 		"packer_user_variables": map[string]string{"prefix": "hello ", "vnc_password": "secret"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := p.runtimeConfig(map[string]interface{}{"Host": "::1", "Name": "guest"})
+	c, err := p.runtimeConfig(map[string]interface{}{"Host": "::1", "Name": "guest", "Username": "admin"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Host != "::1" || c.Password != "secret" || strings.Join(c.Commands, "") != "hello guest<enter>" {
+	if c.Host != "::1" || c.Username != "admin" || c.Password != "secret" || strings.Join(c.Commands, "") != "hello guest<enter>" {
 		t.Fatalf("unexpected runtime values: %+v", c)
 	}
-	if p.config.Host != "{{.Host}}" || p.config.Commands[1] != "{{.Name}}<enter>" {
+	if p.config.Host != "{{.Host}}" || p.config.Username != "{{.Username}}" || p.config.Commands[1] != "{{.Name}}<enter>" {
 		t.Fatal("runtime rendering mutated the prepared configuration")
 	}
 }
@@ -82,19 +82,41 @@ func TestHCLDecodeAndRepeatedPrepare(t *testing.T) {
 	p := new(Provisioner)
 	raw := cty.ObjectVal(map[string]cty.Value{
 		"host": cty.StringVal("localhost"), "port": cty.NumberIntVal(5901),
-		"password": cty.NullVal(cty.String), "commands": cty.ListVal([]cty.Value{cty.StringVal("<wait2s>")}),
+		"username": cty.StringVal("admin"), "password": cty.StringVal("account-password"), "commands": cty.ListVal([]cty.Value{cty.StringVal("<wait2s>")}),
 		"key_interval": cty.NullVal(cty.String), "connect_timeout": cty.NullVal(cty.String),
 	})
 	if err := p.Prepare(raw); err != nil {
 		t.Fatal(err)
 	}
-	if *p.config.Port != 5901 || *p.config.KeyInterval != 100*time.Millisecond {
+	if *p.config.Port != 5901 || p.config.Username != "admin" || p.config.Password != "account-password" || *p.config.KeyInterval != 100*time.Millisecond {
 		t.Fatal("HCL defaults or overrides failed")
 	}
 	if err := p.Prepare(map[string]interface{}{"host": "localhost", "commands": []string{"a"}}); err != nil {
 		t.Fatal(err)
 	}
-	if *p.config.Port != 5900 {
+	if *p.config.Port != 5900 || p.config.Username != "" || p.config.Password != "" {
 		t.Fatal("Prepare retained the previous configuration")
+	}
+}
+
+func TestAppleCredentialValidationAfterInterpolation(t *testing.T) {
+	for _, tc := range []struct{ name, username, password, want string }{
+		{"blank username", "  ", "secret", "username"},
+		{"long username", strings.Repeat("u", 64), "secret", "username"},
+		{"long password", "admin", strings.Repeat("s", 64), "password"},
+		{"multibyte password", "admin", strings.Repeat("é", 32), "password"},
+		{"NUL username", "admin\x00other", "secret", "username"},
+		{"NUL password", "admin", "secret\x00other", "password"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := new(Provisioner)
+			if err := p.Prepare(map[string]interface{}{"host": "localhost", "username": "{{.Username}}", "password": "{{.Password}}", "commands": []string{"a"}}); err != nil {
+				t.Fatal(err)
+			}
+			_, err := p.runtimeConfig(map[string]interface{}{"Username": tc.username, "Password": tc.password})
+			if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "secret") {
+				t.Fatalf("unexpected credential validation: %v", err)
+			}
+		})
 	}
 }

@@ -18,6 +18,7 @@ type Config struct {
 	common.PackerConfig `mapstructure:",squash"`
 	Host                string         `mapstructure:"host" required:"true"`
 	Port                *int           `mapstructure:"port"`
+	Username            string         `mapstructure:"username" required:"false"`
 	Password            string         `mapstructure:"password" required:"false"`
 	Commands            []string       `mapstructure:"commands" required:"true"`
 	KeyInterval         *time.Duration `mapstructure:"key_interval" required:"false"`
@@ -30,7 +31,7 @@ func (p *Provisioner) Prepare(raws ...interface{}) error {
 	// Defer these strings to Provision so JSON build values can be resolved.
 	if err := config.Decode(&p.config, &config.DecodeOpts{
 		Interpolate: true, InterpolateContext: &p.interp,
-		InterpolateFilter: &interpolate.RenderFilter{Exclude: []string{"host", "password", "commands"}},
+		InterpolateFilter: &interpolate.RenderFilter{Exclude: []string{"host", "username", "password", "commands"}},
 	}, raws...); err != nil {
 		// SDK interpolation errors append the original field value after
 		// this delimiter. Preserve the diagnostic without echoing that value.
@@ -88,7 +89,7 @@ func (p *Provisioner) runtimeConfig(data map[string]interface{}) (Config, error)
 	for _, field := range []struct {
 		name  string
 		value *string
-	}{{"host", &c.Host}, {"password", &c.Password}} {
+	}{{"host", &c.Host}, {"username", &c.Username}, {"password", &c.Password}} {
 		*field.value, err = interpolate.Render(*field.value, &interp)
 		if err != nil {
 			return c, fmt.Errorf("could not interpolate VNC %s", field.name)
@@ -99,6 +100,13 @@ func (p *Provisioner) runtimeConfig(data map[string]interface{}) (Config, error)
 		c.Commands[i], err = interpolate.Render(command, &interp)
 		if err != nil {
 			return c, fmt.Errorf("could not interpolate VNC commands[%d]", i)
+		}
+	}
+	// Check the actual credentials after rendering: a template expression can
+	// be longer than the credential it produces.
+	if c.Username != "" {
+		if err := validateAppleCredentials(c.Username, c.Password); err != nil {
+			return c, err
 		}
 	}
 	return c, c.validate()

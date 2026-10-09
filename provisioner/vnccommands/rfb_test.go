@@ -2,11 +2,14 @@ package vnccommands
 
 import (
 	"bytes"
+	"crypto/aes"
 	"crypto/des"
+	"crypto/md5"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"math/bits"
 	"net"
 	"strconv"
@@ -21,7 +24,12 @@ type keyEvent struct {
 }
 
 type rfbOptions struct {
+	username        string
 	password        string
+	securityTypes   []byte
+	appleKeyLength  int
+	stallApple      bool
+	failureReason   string
 	stall           bool
 	version         string
 	disconnectAfter int
@@ -90,6 +98,13 @@ func (s *rfbServer) serve(c net.Conn, options rfbOptions) error {
 	if options.password != "" {
 		methods = []byte{2, 1, 2}
 	}
+	if options.username != "" {
+		// Offer weaker methods first to detect accidental fallback.
+		methods = []byte{3, 1, 2, 30}
+	}
+	if options.securityTypes != nil {
+		methods = append([]byte{byte(len(options.securityTypes))}, options.securityTypes...)
+	}
 	if _, err := c.Write(methods); err != nil {
 		return err
 	}
@@ -103,6 +118,9 @@ func (s *rfbServer) serve(c net.Conn, options rfbOptions) error {
 	expected := byte(1)
 	if options.password != "" {
 		expected = 2
+	}
+	if options.username != "" {
+		expected = 30
 	}
 	if selection[0] != expected {
 		return fmt.Errorf("authentication downgraded: got %d, want %d", selection[0], expected)
@@ -128,6 +146,28 @@ func (s *rfbServer) serve(c net.Conn, options rfbOptions) error {
 		if !bytes.Equal(response, want) {
 			binary.Write(c, binary.BigEndian, uint32(1))
 			reason := "incorrect VNC password"
+			binary.Write(c, binary.BigEndian, uint32(len(reason)))
+			io.WriteString(c, reason)
+			_, err := io.Copy(io.Discard, c)
+			return err
+		}
+	}
+	if expected == 30 {
+		if options.stallApple {
+			close(s.ready)
+			_, err := io.Copy(io.Discard, c)
+			return err
+		}
+		ok, err := serveAppleAuthentication(c, options)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			reason := options.failureReason
+			if reason == "" {
+				reason = "incorrect Apple account credentials"
+			}
+			binary.Write(c, binary.BigEndian, uint32(1))
 			binary.Write(c, binary.BigEndian, uint32(len(reason)))
 			io.WriteString(c, reason)
 			_, err := io.Copy(io.Discard, c)
@@ -167,6 +207,52 @@ func (s *rfbServer) serve(c net.Conn, options rfbOptions) error {
 			return nil
 		}
 	}
+}
+
+// Independently act as the Apple server: receive ciphertext followed by the
+// client's DH public key, derive the secret, and decrypt the two NUL-terminated
+// 64-byte fields. No client encryption helpers are reused.
+func serveAppleAuthentication(c net.Conn, options rfbOptions) (bool, error) {
+	keyLength := options.appleKeyLength
+	if keyLength == 0 {
+		keyLength = 16
+	}
+	// 2^128 - 159 is prime. A fixed server exponent is sufficient for tests.
+	prime, _ := new(big.Int).SetString("ffffffffffffffffffffffffffffff61", 16)
+	private := big.NewInt(7)
+	public := new(big.Int).Exp(big.NewInt(2), private, prime)
+	challenge := make([]byte, 4+2*keyLength)
+	binary.BigEndian.PutUint16(challenge[:2], 2)
+	binary.BigEndian.PutUint16(challenge[2:4], uint16(keyLength))
+	prime.FillBytes(challenge[4 : 4+keyLength])
+	public.FillBytes(challenge[4+keyLength:])
+	if _, err := c.Write(challenge); err != nil {
+		return false, err
+	}
+	response := make([]byte, 128+keyLength)
+	if _, err := io.ReadFull(c, response); err != nil {
+		return false, err
+	}
+	peer := new(big.Int).SetBytes(response[128:])
+	if peer.Cmp(big.NewInt(1)) <= 0 || peer.Cmp(prime) >= 0 {
+		return false, fmt.Errorf("invalid client DH public key")
+	}
+	shared := new(big.Int).Exp(peer, private, prime)
+	key := md5.Sum(shared.FillBytes(make([]byte, keyLength)))
+	cipher, err := aes.NewCipher(key[:])
+	if err != nil {
+		return false, err
+	}
+	var plaintext [128]byte
+	for offset := 0; offset < len(plaintext); offset += aes.BlockSize {
+		cipher.Decrypt(plaintext[offset:offset+aes.BlockSize], response[offset:offset+aes.BlockSize])
+	}
+	usernameEnd := bytes.IndexByte(plaintext[:64], 0)
+	passwordEnd := bytes.IndexByte(plaintext[64:], 0)
+	if usernameEnd < 0 || passwordEnd < 0 {
+		return false, fmt.Errorf("Apple credentials are not NUL-terminated")
+	}
+	return string(plaintext[:usernameEnd]) == options.username && string(plaintext[64:64+passwordEnd]) == options.password, nil
 }
 
 func (s *rfbServer) awaitClosed(t *testing.T) {

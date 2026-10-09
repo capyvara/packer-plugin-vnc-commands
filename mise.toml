@@ -49,5 +49,5 @@ depends = ["build"]
 run = "bash scripts/release.sh release"
 
 [tasks."release:verify-install"]
-description = "Verify packer init installs the published v0.1.0 release"
+description = "Verify packer init installs the published release for the latest local tag"
 run = "bash scripts/verify-release-install.sh"

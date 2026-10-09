@@ -1,6 +1,7 @@
 {
   "variables": {
     "vnc_host": "127.0.0.1",
+    "vnc_username": "",
     "vnc_password": ""
   },
   "builders": [{
@@ -12,6 +13,7 @@
   "provisioners": [{
     "type": "vnc-commands",
     "host": "{{.Host}}",
+    "username": "{{user `vnc_username`}}",
     "password": "{{user `vnc_password`}}",
     "commands": ["hello", "<enter><wait2s>"],
     "timeout": "2m"

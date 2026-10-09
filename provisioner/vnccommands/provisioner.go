@@ -50,7 +50,9 @@ func (p *Provisioner) Provision(ctx context.Context, ui packer.Ui, _ packer.Comm
 		return fmt.Errorf("set VNC handshake deadline: %w", err)
 	}
 	auth := []vnc.ClientAuth{new(vnc.ClientAuthNone)}
-	if c.Password != "" {
+	if c.Username != "" {
+		auth = []vnc.ClientAuth{&appleAuth{username: c.Username, password: c.Password}}
+	} else if c.Password != "" {
 		auth = []vnc.ClientAuth{&vnc.PasswordAuth{Password: c.Password}}
 	}
 	client, err := vnc.Client(conn, &vnc.ClientConfig{Auth: auth, Exclusive: false})
@@ -59,8 +61,10 @@ func (p *Provisioner) Provision(ctx context.Context, ui packer.Ui, _ packer.Comm
 			return ctx.Err()
 		}
 		message := err.Error()
-		if c.Password != "" {
-			message = strings.ReplaceAll(message, c.Password, "[redacted]")
+		for _, credential := range []string{c.Password, c.Username} {
+			if credential != "" {
+				message = strings.ReplaceAll(message, credential, "[redacted]")
+			}
 		}
 		return fmt.Errorf("VNC handshake/authentication at %s failed (requires RFB 3.8 and matching authentication): %s", address, message)
 	}

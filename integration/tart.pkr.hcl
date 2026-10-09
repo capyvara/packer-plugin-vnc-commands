@@ -36,6 +36,14 @@ variable "vnc_password" {
   default   = "vnctest"
   sensitive = true
 }
+variable "vnc_auth" {
+  type    = string
+  default = "vnc"
+  validation {
+    condition     = contains(["vnc", "apple"], var.vnc_auth)
+    error_message = "The vnc_auth value must be vnc or apple."
+  }
+}
 
 source "tart-cli" "test" {
   vm_base_name       = var.base_vm
@@ -56,6 +64,7 @@ build {
     environment_vars = [
       "MACHINE_PASSWORD=${var.ssh_password}",
       "VNC_PASSWORD=${var.vnc_password}",
+      "VNC_AUTH=${var.vnc_auth}",
     ]
     script  = "integration/configure-screen-sharing.sh"
     timeout = "2m"
@@ -73,7 +82,8 @@ build {
 
   provisioner "vnc-commands" {
     host     = build.Host
-    password = var.vnc_password
+    username = var.vnc_auth == "apple" ? var.ssh_username : ""
+    password = var.vnc_auth == "apple" ? var.ssh_password : var.vnc_password
     # Screen Sharing's connection notification temporarily takes keyboard focus.
     # Wait after connecting, and let the last keys settle before disconnecting.
     commands        = ["<wait10s>", "printf '%s' 'vnc-commands-ok' > /tmp/vnc-commands-marker<enter>", "<wait2s>"]

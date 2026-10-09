@@ -18,6 +18,11 @@ variable "vnc_password" {
   sensitive = true
 }
 
+variable "vnc_username" {
+  type    = string
+  default = ""
+}
+
 # A validation-only example. Supply a real SSH/VNC guest before building.
 source "null" "example" {
   ssh_host     = var.vnc_host
@@ -34,6 +39,7 @@ build {
 
   provisioner "vnc-commands" {
     host            = build.Host
+    username        = var.vnc_username
     password        = var.vnc_password
     commands        = ["<wait2s>", "hello<enter>", "<wait2s>"]
     key_interval    = "100ms"

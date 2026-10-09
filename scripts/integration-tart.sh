@@ -7,6 +7,7 @@ export PKR_VAR_base_vm=${TART_BASE_VM:-macos-base}
 export PKR_VAR_ssh_username=${TART_SSH_USERNAME:-admin}
 export PKR_VAR_ssh_password=${TART_SSH_PASSWORD:-admin}
 export PKR_VAR_vnc_password=${TART_VNC_PASSWORD:-vnctest}
+export PKR_VAR_vnc_auth=${TART_VNC_AUTH:-vnc}
 export PKR_VAR_debug_pause=${TART_DEBUG_PAUSE:-false}
 # Always generate the output name here; callers cannot override the cleanup target.
 export PKR_VAR_test_vm="vnc-commands-test-$(uuidgen | tr '[:upper:]' '[:lower:]')"

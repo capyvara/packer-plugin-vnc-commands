@@ -20,6 +20,7 @@ type FlatConfig struct {
 	PackerSensitiveVars []string          `mapstructure:"packer_sensitive_variables" cty:"packer_sensitive_variables" hcl:"packer_sensitive_variables"`
 	Host                *string           `mapstructure:"host" required:"true" cty:"host" hcl:"host"`
 	Port                *int              `mapstructure:"port" cty:"port" hcl:"port"`
+	Username            *string           `mapstructure:"username" required:"false" cty:"username" hcl:"username"`
 	Password            *string           `mapstructure:"password" required:"false" cty:"password" hcl:"password"`
 	Commands            []string          `mapstructure:"commands" required:"true" cty:"commands" hcl:"commands"`
 	KeyInterval         *string           `mapstructure:"key_interval" required:"false" cty:"key_interval" hcl:"key_interval"`
@@ -48,6 +49,7 @@ func (*FlatConfig) HCL2Spec() map[string]hcldec.Spec {
 		"packer_sensitive_variables": &hcldec.AttrSpec{Name: "packer_sensitive_variables", Type: cty.List(cty.String), Required: false},
 		"host":                       &hcldec.AttrSpec{Name: "host", Type: cty.String, Required: false},
 		"port":                       &hcldec.AttrSpec{Name: "port", Type: cty.Number, Required: false},
+		"username":                   &hcldec.AttrSpec{Name: "username", Type: cty.String, Required: false},
 		"password":                   &hcldec.AttrSpec{Name: "password", Type: cty.String, Required: false},
 		"commands":                   &hcldec.AttrSpec{Name: "commands", Type: cty.List(cty.String), Required: false},
 		"key_interval":               &hcldec.AttrSpec{Name: "key_interval", Type: cty.String, Required: false},

@@ -96,6 +96,7 @@ func TestCancellation(t *testing.T) {
 		overrides map[string]interface{}
 	}{
 		{"handshake", rfbOptions{stall: true}, nil},
+		{"Apple handshake", rfbOptions{username: "admin", stallApple: true}, map[string]interface{}{"username": "admin", "password": "secret"}},
 		{"wait", rfbOptions{}, map[string]interface{}{"commands": []string{"a<wait1h>"}}},
 		{"key interval", rfbOptions{}, map[string]interface{}{"key_interval": "1h"}},
 	} {
@@ -112,7 +113,7 @@ func TestCancellation(t *testing.T) {
 				t.Fatal("server did not become ready")
 			}
 			// Make sure cancellation exercises execution, not just the handshake.
-			if tc.name != "handshake" {
+			if tc.name != "handshake" && tc.name != "Apple handshake" {
 				count := 1
 				if tc.name == "wait" {
 					count = 2

@@ -25,14 +25,15 @@ The source deliberately omits `packer-plugin-`; the public repository is [capyva
 | --- | --- | --- |
 | `host` | Required | Nonempty IP address or DNS name of the VNC server. Use an unbracketed IPv6 address such as `::1`; address construction uses `net.JoinHostPort`. |
 | `port` | `5900` | TCP port from 1 to 65535. |
-| `password` | `""` | Standard VNC password. Empty selects unauthenticated VNC; a supplied password requires password authentication. |
+| `username` | `""` | A supplied username selects Apple account authentication (security type 30). Use the Mac account's short name and its account password. No fallback to other authentication methods. |
+| `password` | `""` | Mac account password when `username` is supplied; otherwise a classic VNC password. With both credentials empty, selects unauthenticated VNC. Apple credentials must each fit in 63 bytes and contain no NUL; checked after interpolation. |
 | `commands` | Required | Nonempty list of strings with nonempty combined text, concatenated without separators. |
 | `key_interval` | `"100ms"` | Positive Go duration between each key event, including key-down and key-up. |
 | `connect_timeout` | `"30s"` | Positive Go duration bounding TCP connection and the complete VNC handshake together. |
 
 Packer's common provisioner options also apply, including `timeout`, `only`, `except`, and `pause_before`. Set `timeout` to bound the entire provisioner, including typing and waits. Zero and negative durations are invalid.
 
-HCL supports ordinary variables (`var.vnc_password`) and runtime builder values (`build.Host`). Packer prepares the provisioner again when builder values are available. Legacy JSON supports user expressions such as ``{{user `vnc_password`}}`` and runtime expressions such as `{{.Host}}` in `host`, `password`, and `commands`.
+HCL supports ordinary variables (`var.vnc_password`) and runtime builder values (`build.Host`). Packer prepares the provisioner again when builder values are available. Legacy JSON supports user expressions such as ``{{user `vnc_password`}}`` and runtime expressions such as `{{.Host}}` in `host`, `username`, `password`, and `commands`.
 
 ## Between shell provisioners
 
@@ -66,6 +67,21 @@ On macOS, Screen Sharing's “Your screen is being controlled” notification ca
 
 See [examples/basic.pkr.hcl](examples/basic.pkr.hcl) and [examples/legacy.json](examples/legacy.json). The null-builder examples are for validation; building requires a real SSH/VNC guest.
 
+## macOS account authentication
+
+Enable **System Settings > General > Sharing > Screen Sharing** and allow the Mac account to connect. You can leave **“VNC viewers may control screen with password” disabled**. Supply the account's short username and login password:
+
+```hcl
+provisioner "vnc-commands" {
+  host     = build.Host
+  username = var.macos_username
+  password = var.macos_password
+  commands = ["<wait10s>", "echo ready<enter>", "<wait2s>"]
+}
+```
+
+Declare the password variable with `sensitive = true`. Authentication does not prepare or focus the graphical session: keep the desired account logged in with the target application focused before typing. Supplying a username requires Apple authentication, even if the server also offers classic VNC or unauthenticated access. Omitting `username` preserves classic VNC password behavior. This is a local macOS account, not an Apple ID.
+
 ## Command semantics
 
 Commands use the Packer SDK parser, validator, and VNC driver. List boundaries add no spaces, newlines, waits, or modifier releases; even a token can span two strings. Supported expressions include:
@@ -81,9 +97,9 @@ This plugin does not implement OCR, mouse operations, endpoint discovery, SSH tu
 
 ## Protocol, authentication, and logging
 
-The pinned `mitchellh/go-vnc` client negotiates **RFB 3.8** and supports only None (security type 1) and classic VNC password authentication (type 2). It does not implement TLS, VeNCrypt, Apple account authentication, or RFB 3.3/3.7. Classic VNC passwords use only the first eight bytes. Connections are shared, preserving other VNC clients, and are closed on success, error, timeout, or cancellation. Disconnects interrupt timed waits; cancellation also interrupts long key intervals and blocked socket operations.
+The pinned `mitchellh/go-vnc` client negotiates **RFB 3.8**, including from Apple's `RFB 003.889` banner. It supports None (security type 1), classic VNC password authentication (type 2), and the plugin's Apple Remote Desktop account authentication (type 30). Apple authentication exchanges Diffie-Hellman keys and encrypts the credentials with AES-128-ECB using MD5 of the fixed-width shared secret, as required by that protocol. Classic VNC passwords use only the first eight bytes; Apple account passwords use the complete supplied value, up to 63 bytes. TLS, VeNCrypt, and RFB 3.3/3.7 are not implemented. Connections are shared, preserving other VNC clients, and are closed on success, error, timeout, or cancellation. Disconnects interrupt timed waits; cancellation also interrupts long key intervals and blocked socket operations.
 
-Normal plugin status messages omit passwords and typed commands. **Packer/SDK debug logs can expose typed characters**, and Packer can log configuration or shell setup. Avoid enabling `PACKER_LOG` when typing secrets. The transport is unencrypted; use an appropriately trusted network or an externally managed tunnel.
+Normal plugin status messages omit account credentials and typed commands. **Packer/SDK debug logs can expose typed characters**, and Packer can log configuration or shell setup. Avoid enabling `PACKER_LOG` when typing secrets. Apple authentication encrypts the credentials but does not authenticate the server or encrypt subsequent traffic, including typed keys. Use an appropriately trusted network or an externally managed tunnel.
 
 ## Development
 
@@ -100,7 +116,7 @@ Install [Mise](https://mise.jdx.dev/), then run `mise install`. Tool versions ar
 | `mise run integration:tart` | Run the disposable macOS VM integration. |
 | `mise run release:snapshot` | Validate ZIP packaging for all six platforms without publication. |
 | `mise run release` | Publish a clean stable version tag with GoReleaser. |
-| `mise run release:verify-install` | Install v0.1.0 with `packer init` in an isolated directory and validate it. |
+| `mise run release:verify-install` | Install the release for the latest local tag with `packer init` in an isolated directory and validate it. |
 
 ## Local Tart integration
 
@@ -108,21 +124,23 @@ Requires macOS on Apple Silicon, a cached stopped `macos-base` VM, SSH with pass
 
 ```sh
 mise run integration:tart
+# Authenticate as the Mac account with classic VNC password access disabled:
+TART_VNC_AUTH=apple mise run integration:tart
 # Pause before each VNC step to inspect focus and modal dialogs:
 TART_DEBUG_PAUSE=true mise run integration:tart
 # Optional overrides:
 TART_BASE_VM=another-cached-base TART_SSH_USERNAME=admin TART_SSH_PASSWORD=admin mise run integration:tart
 ```
 
-The task generates a unique test VM name and lets Packer clone the base. It opens a Tart window, keeps the display awake, retains Screen Sharing, and configures classic VNC password access and control privileges on the clone. A shell step prepares Terminal; the VNC step waits ten seconds after connecting, types the marker command, then waits two seconds before disconnecting. The final shell step verifies exact marker bytes over SSH with a 30-second deadline. The task's trap deletes only its generated test VM. The base is unchanged. `TART_VNC_PASSWORD` overrides the VNC test password (default `vnctest`); it is a disposable test credential. This integration runs locally, without a dedicated CI runner.
+The task generates a unique test VM name and lets Packer clone the base. It opens a Tart window, keeps the display awake, retains Screen Sharing, and configures control privileges on the clone. By default it enables classic VNC password access; `TART_VNC_AUTH=apple` disables that access and authenticates with the SSH user's Mac account credentials. A shell step prepares Terminal; the VNC step waits ten seconds after connecting, types the marker command, then waits two seconds before disconnecting. The final shell step verifies exact marker bytes over SSH with a 30-second deadline. The task's trap deletes only its generated test VM. The base is unchanged. `TART_VNC_PASSWORD` overrides the classic VNC test password (default `vnctest`); it is a disposable test credential. This integration runs locally, without a dedicated CI runner.
 
 ## Releases
 
 CI runs `mise run check` and `mise run release:snapshot` on pushes to `main` and pull requests. Before a release, also pass the local Tart integration and wait for CI on the exact commit. Then:
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 The tag workflow checks the code, builds and validates packaging before publication, and uses GoReleaser to publish ZIPs for Linux, macOS, and Windows on amd64/arm64. Packer API version comes from the built plugin's `describe` metadata. ZIPs and enclosed binaries follow `packer-plugin-vnc-commands_vVERSION_xAPI_OS_ARCH` (Windows binaries append `.exe`), with `packer-plugin-vnc-commands_vVERSION_SHA256SUMS` covering the archives. The workflow verifies the published release through `packer init`; run `mise run release:verify-install` locally too. For a manual release, set `GITHUB_TOKEN` and run `mise run release` from a clean tagged checkout.
