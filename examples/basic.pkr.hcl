@@ -38,10 +38,12 @@ build {
   }
 
   provisioner "vnc-commands" {
-    host            = build.Host
-    username        = var.vnc_username
-    password        = var.vnc_password
-    commands        = ["<wait2s>", "hello<enter>", "<wait2s>"]
+    host     = build.Host
+    username = var.vnc_username
+    password = var.vnc_password
+    commands = ["<wait2s>", "hello<enter>", "<wait2s>"]
+    # Mouse commands can be mixed with keys and waits, for example:
+    # commands = ["<wait10s>", "<click 400,300>", "<rightClick 50%,75%><esc>", "<wait2s>"]
     key_interval    = "100ms"
     connect_timeout = "30s"
     timeout         = "2m"

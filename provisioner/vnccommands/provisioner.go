@@ -34,6 +34,10 @@ func (p *Provisioner) Provision(ctx context.Context, ui packer.Ui, _ packer.Comm
 	if err != nil {
 		return err
 	}
+	seq, err := parseCommands(strings.Join(c.Commands, ""), false)
+	if err != nil {
+		return err
+	}
 	address := net.JoinHostPort(c.Host, strconv.Itoa(*c.Port))
 	ui.Say("Connecting to VNC at " + address)
 	connectCtx, cancelConnect := context.WithTimeout(ctx, *c.ConnectTimeout)
@@ -58,9 +62,11 @@ func (p *Provisioner) Provision(ctx context.Context, ui packer.Ui, _ packer.Comm
 	}
 	var messages chan vnc.ServerMessage
 	var serverMessages []vnc.ServerMessage
-	if c.Preview || c.RecordingPath != "" {
+	capture := c.Preview || c.RecordingPath != ""
+	size := new(framebufferSize)
+	if capture || seq.hasMouse {
 		messages = make(chan vnc.ServerMessage, 16)
-		serverMessages = []vnc.ServerMessage{&screenUpdateMessage{}}
+		serverMessages = []vnc.ServerMessage{&screenUpdateMessage{size: size, discardPixels: !capture}}
 	}
 	transport := &readerConn{Conn: conn, done: make(chan struct{})}
 	client, err := vnc.Client(transport, &vnc.ClientConfig{Auth: auth, Exclusive: false, ServerMessageCh: messages, ServerMessages: serverMessages})
@@ -109,8 +115,9 @@ func (p *Provisioner) Provision(ctx context.Context, ui packer.Ui, _ packer.Comm
 		case <-watchDone:
 		}
 	}()
-	writer := &vncWriter{client: client}
-	if messages != nil {
+	size.set(client.FrameBufferWidth, client.FrameBufferHeight)
+	writer := &vncWriter{client: client, size: size}
+	if capture {
 		screen, err := startScreen(execCtx, c, writer, messages, ui, p.openPreview, cancel)
 		if err != nil {
 			return fmt.Errorf("start VNC screen capture: %w", err)
@@ -127,25 +134,31 @@ func (p *Provisioner) Provision(ctx context.Context, ui packer.Ui, _ packer.Comm
 		if err := screen.waitReady(execCtx, *c.ConnectTimeout); err != nil {
 			return err
 		}
+	} else if seq.hasMouse {
+		tracking, err := startPointerTracking(execCtx, writer, messages, *c.FrameRate, cancel)
+		if err != nil {
+			return fmt.Errorf("start VNC framebuffer size tracking: %w", err)
+		}
+		defer func() {
+			cancel(nil)
+			conn.Close()
+			tracking.Close()
+		}()
 	}
-	seq, err := bootcommand.GenerateExpressionSequence(strings.Join(c.Commands, ""))
-	if err != nil {
-		return errors.New("could not parse runtime VNC commands")
-	}
-	ui.Say("Typing VNC commands")
+	ui.Say("Sending VNC commands")
 	// The SDK supplies key mapping and modifiers. Its built-in sleep is not
 	// cancellable, so impose the real interval in our KeyEvent adapter.
 	driver := bootcommand.NewVNCDriver(&pacedKeys{ctx: execCtx, client: writer, interval: *c.KeyInterval}, time.Nanosecond)
-	if err := seq.Do(execCtx, driver); err != nil {
+	if err := seq.Do(execCtx, driver, writer, *c.KeyInterval); err != nil {
 		if cause := context.Cause(execCtx); cause != nil {
 			return fmt.Errorf("VNC command execution stopped: %w", cause)
 		}
-		return fmt.Errorf("type VNC commands: %w", err)
+		return fmt.Errorf("send VNC commands: %w", err)
 	}
 	if cause := context.Cause(execCtx); cause != nil {
 		return fmt.Errorf("VNC command execution stopped: %w", cause)
 	}
-	ui.Say("Finished typing VNC commands")
+	ui.Say("Finished sending VNC commands")
 	return nil
 }
 
@@ -191,12 +204,5 @@ func (k *pacedKeys) KeyEvent(key uint32, down bool) error {
 	if err := k.client.KeyEvent(key, down); err != nil {
 		return err
 	}
-	timer := time.NewTimer(k.interval)
-	defer timer.Stop()
-	select {
-	case <-k.ctx.Done():
-		return k.ctx.Err()
-	case <-timer.C:
-		return nil
-	}
+	return waitInterval(k.ctx, k.interval)
 }

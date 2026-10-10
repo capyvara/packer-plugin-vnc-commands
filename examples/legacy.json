@@ -15,7 +15,7 @@
     "host": "{{.Host}}",
     "username": "{{user `vnc_username`}}",
     "password": "{{user `vnc_password`}}",
-    "commands": ["hello", "<enter><wait2s>"],
+    "commands": ["<wait10s><click 50%,50%>", "hello", "<enter><rightClick 50%,75%><wait1s><esc><wait2s>"],
     "timeout": "2m"
   }]
 }

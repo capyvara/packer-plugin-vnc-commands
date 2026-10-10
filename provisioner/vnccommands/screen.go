@@ -12,6 +12,7 @@ import (
 	"image/jpeg"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/packer-plugin-sdk/packer"
@@ -23,12 +24,32 @@ import (
 type vncWriter struct {
 	client *vnc.ClientConn
 	mu     sync.Mutex
+	size   *framebufferSize
+}
+
+// Keep dimensions in one atomic snapshot. The network reader changes them;
+// commands must never read go-vnc's mutable framebuffer fields directly.
+type framebufferSize struct{ dimensions atomic.Uint32 }
+
+func (s *framebufferSize) set(width, height uint16) {
+	s.dimensions.Store(uint32(width)<<16 | uint32(height))
+}
+
+func (s *framebufferSize) get() (uint16, uint16) {
+	dimensions := s.dimensions.Load()
+	return uint16(dimensions >> 16), uint16(dimensions)
 }
 
 func (w *vncWriter) KeyEvent(key uint32, down bool) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.client.KeyEvent(key, down)
+}
+
+func (w *vncWriter) PointerEvent(mask vnc.ButtonMask, x, y uint16) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.client.PointerEvent(mask, x, y)
 }
 
 func (w *vncWriter) request(incremental bool, width, height int) error {
@@ -63,11 +84,14 @@ func (e *boundedRawEncoding) Read(c *vnc.ClientConn, rect *vnc.Rectangle, r io.R
 
 // go-vnc's standard update parser always installs its own raw decoder,
 // overriding SetEncodings. Override the message parser to enforce bounds.
-type screenUpdateMessage struct{}
+type screenUpdateMessage struct {
+	size          *framebufferSize
+	discardPixels bool
+}
 
 func (*screenUpdateMessage) Type() uint8 { return 0 }
 
-func (*screenUpdateMessage) Read(c *vnc.ClientConn, r io.Reader) (vnc.ServerMessage, error) {
+func (m *screenUpdateMessage) Read(c *vnc.ClientConn, r io.Reader) (vnc.ServerMessage, error) {
 	var header [3]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return nil, err
@@ -85,8 +109,11 @@ func (*screenUpdateMessage) Read(c *vnc.ClientConn, r io.Reader) (vnc.ServerMess
 		switch encoding := int32(binary.BigEndian.Uint32(data[8:])); encoding {
 		case 0:
 			decoder = &boundedRawEncoding{}
+			if m.discardPixels {
+				decoder = &discardRawEncoding{}
+			}
 		case -223:
-			decoder = &desktopSizeEncoding{}
+			decoder = &desktopSizeEncoding{size: m.size}
 		default:
 			return nil, fmt.Errorf("unsupported VNC screen encoding: %d", encoding)
 		}
@@ -101,16 +128,22 @@ func (*screenUpdateMessage) Read(c *vnc.ClientConn, r io.Reader) (vnc.ServerMess
 
 // DesktopSize is a pseudo-encoding whose dimensions are in the rectangle
 // header. The network reader owns client dimensions; capture owns its copy.
-type desktopSizeEncoding struct{ width, height uint16 }
+type desktopSizeEncoding struct {
+	width, height uint16
+	size          *framebufferSize
+}
 
 func (*desktopSizeEncoding) Type() int32 { return -223 }
 
-func (*desktopSizeEncoding) Read(c *vnc.ClientConn, rect *vnc.Rectangle, _ io.Reader) (vnc.Encoding, error) {
+func (e *desktopSizeEncoding) Read(c *vnc.ClientConn, rect *vnc.Rectangle, _ io.Reader) (vnc.Encoding, error) {
 	if err := validateScreenSize(int(rect.Width), int(rect.Height)); err != nil {
 		return nil, err
 	}
 	c.FrameBufferWidth, c.FrameBufferHeight = rect.Width, rect.Height
-	return &desktopSizeEncoding{rect.Width, rect.Height}, nil
+	if e.size != nil {
+		e.size.set(rect.Width, rect.Height)
+	}
+	return &desktopSizeEncoding{width: rect.Width, height: rect.Height}, nil
 }
 
 type screenSession struct {
@@ -128,7 +161,8 @@ type screenSession struct {
 
 func startScreen(ctx context.Context, c Config, writer *vncWriter, messages <-chan vnc.ServerMessage, ui packer.Ui, openBrowser func(context.Context, string) error, fail context.CancelCauseFunc) (*screenSession, error) {
 	client := writer.client
-	width, height := int(client.FrameBufferWidth), int(client.FrameBufferHeight)
+	w, h := writer.size.get()
+	width, height := int(w), int(h)
 	if err := validateScreenSize(width, height); err != nil {
 		return nil, err
 	}

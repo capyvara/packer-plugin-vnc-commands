@@ -100,4 +100,35 @@ build {
     script  = "integration/verify-marker.sh"
     timeout = "1m"
   }
+
+  provisioner "file" {
+    source      = "integration/mouse-test.swift"
+    destination = "/tmp/vnc-commands-mouse-test.swift"
+  }
+
+  provisioner "shell" {
+    script  = "integration/prepare-mouse.sh"
+    timeout = "3m"
+  }
+
+  provisioner "breakpoint" {
+    disable = !var.debug_pause
+    note    = "Before mouse commands: the VNC Mouse Test window should cover the desktop. Dismiss any modal dialog before continuing."
+  }
+
+  provisioner "vnc-commands" {
+    host            = build.Host
+    username        = var.vnc_auth == "apple" ? var.ssh_username : ""
+    password        = var.vnc_auth == "apple" ? var.ssh_password : var.vnc_password
+    commands        = ["<wait10s>", "<click 400,300><rightClick 75%,50%><click 25%,50%>", "<wait2s>"]
+    key_interval    = "100ms"
+    connect_timeout = "30s"
+    timeout         = "1m"
+    # Exercise resize tracking without requiring preview or recording.
+  }
+
+  provisioner "shell" {
+    script  = "integration/verify-mouse.sh"
+    timeout = "1m"
+  }
 }

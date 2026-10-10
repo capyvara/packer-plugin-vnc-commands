@@ -23,6 +23,11 @@ type keyEvent struct {
 	down bool
 }
 
+type pointerEvent struct {
+	mask byte
+	x, y uint16
+}
+
 type rfbOptions struct {
 	username         string
 	password         string
@@ -51,6 +56,8 @@ type rfbServer struct {
 	ready    chan struct{}
 	done     chan error
 	requests chan screenRequest
+	pointers chan pointerEvent
+	inputs   chan any
 }
 
 // A deliberately small RFB 3.8 server exercises the wire protocol rather
@@ -63,7 +70,7 @@ func startRFB(t *testing.T, options rfbOptions) *rfbServer {
 	}
 	host, port, _ := net.SplitHostPort(listener.Addr().String())
 	p, _ := strconv.Atoi(port)
-	s := &rfbServer{host: host, port: p, events: make(chan keyEvent, 1024), ready: make(chan struct{}), done: make(chan error, 1), requests: make(chan screenRequest, 1024)}
+	s := &rfbServer{host: host, port: p, events: make(chan keyEvent, 1024), ready: make(chan struct{}), done: make(chan error, 1), requests: make(chan screenRequest, 1024), pointers: make(chan pointerEvent, 1024), inputs: make(chan any, 1024)}
 	t.Cleanup(func() { listener.Close() })
 	go func() {
 		conn, err := listener.Accept()
@@ -243,7 +250,21 @@ func (s *rfbServer) serve(c net.Conn, options rfbOptions) error {
 			if _, err := io.ReadFull(c, packet[:]); err != nil {
 				return err
 			}
-			s.events <- keyEvent{binary.BigEndian.Uint32(packet[3:]), packet[0] == 1}
+			event := keyEvent{binary.BigEndian.Uint32(packet[3:]), packet[0] == 1}
+			s.events <- event
+			s.inputs <- event
+			count++
+			if options.disconnectAfter > 0 && count == options.disconnectAfter {
+				return nil
+			}
+		case 5:
+			var packet [5]byte
+			if _, err := io.ReadFull(c, packet[:]); err != nil {
+				return err
+			}
+			event := pointerEvent{packet[0], binary.BigEndian.Uint16(packet[1:3]), binary.BigEndian.Uint16(packet[3:5])}
+			s.pointers <- event
+			s.inputs <- event
 			count++
 			if options.disconnectAfter > 0 && count == options.disconnectAfter {
 				return nil

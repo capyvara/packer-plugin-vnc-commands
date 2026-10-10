@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hashicorp/packer-plugin-sdk/bootcommand"
 	"github.com/hashicorp/packer-plugin-sdk/common"
 	"github.com/hashicorp/packer-plugin-sdk/template/config"
 	"github.com/hashicorp/packer-plugin-sdk/template/interpolate"
@@ -59,10 +58,10 @@ func (p *Provisioner) Prepare(raws ...interface{}) error {
 		rate := 5
 		p.config.FrameRate = &rate
 	}
-	return p.config.validate()
+	return p.config.validate(true)
 }
 
-func (c *Config) validate() error {
+func (c *Config) validate(allowTemplates bool) error {
 	var errs []error
 	if strings.TrimSpace(c.Host) == "" {
 		errs = append(errs, errors.New("host must be a nonempty IP address or DNS name"))
@@ -85,12 +84,8 @@ func (c *Config) validate() error {
 	if len(c.Commands) == 0 || strings.Join(c.Commands, "") == "" {
 		errs = append(errs, errors.New("commands must contain at least one nonempty command"))
 	} else {
-		seq, err := bootcommand.GenerateExpressionSequence(strings.Join(c.Commands, ""))
-		if err != nil {
-			// Parser errors may contain typed text. Keep it out of normal output.
-			errs = append(errs, errors.New("commands could not be parsed as Packer boot-command expressions"))
-		} else if len(seq.Validate()) > 0 {
-			errs = append(errs, errors.New("commands contain an invalid Packer expression; waits must be positive"))
+		if _, err := parseCommands(strings.Join(c.Commands, ""), allowTemplates); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
@@ -127,5 +122,5 @@ func (p *Provisioner) runtimeConfig(data map[string]interface{}) (Config, error)
 	if c.RecordingPath != "" && !strings.EqualFold(filepath.Ext(c.RecordingPath), ".avi") {
 		return c, errors.New("recording_path must end in .avi")
 	}
-	return c, c.validate()
+	return c, c.validate(false)
 }

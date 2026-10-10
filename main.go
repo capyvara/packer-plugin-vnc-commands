@@ -10,7 +10,7 @@ import (
 )
 
 // Set by GoReleaser; local builds remain distinguishable from releases.
-var pluginVersion = "0.2.0-dev"
+var pluginVersion = "0.3.0-dev"
 
 func main() {
 	set := plugin.NewSet()

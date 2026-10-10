@@ -1,6 +1,6 @@
 # packer-plugin-vnc-commands
 
-A Packer provisioner that types standard boot-command expressions over VNC at any point in a build. It connects from the machine running Packer, independently of the builder's communicator.
+A Packer provisioner that sends standard boot-command expressions and coordinate-based mouse clicks over VNC at any point in a build. It connects from the machine running Packer, independently of the builder's communicator.
 
 ## Installation
 
@@ -28,12 +28,12 @@ The source deliberately omits `packer-plugin-`; the public repository is [capyva
 | `username` | `""` | A supplied username selects Apple account authentication (security type 30). Use the Mac account's short name and its account password. No fallback to other authentication methods. |
 | `password` | `""` | Mac account password when `username` is supplied; otherwise a classic VNC password. With both credentials empty, selects unauthenticated VNC. Apple credentials must each fit in 63 bytes and contain no NUL; checked after interpolation. |
 | `commands` | Required | Nonempty list of strings with nonempty combined text, concatenated without separators. |
-| `key_interval` | `"100ms"` | Positive Go duration between each key event, including key-down and key-up. |
+| `key_interval` | `"100ms"` | Positive Go duration between input events, including key-down/key-up and mouse movement/button-down/button-up. |
 | `connect_timeout` | `"30s"` | Positive Go duration bounding TCP connection and the complete VNC handshake together. |
 | `preview` | `false` | Serve an observe-only browser preview on `127.0.0.1` at an automatically assigned port. Always prints its URL when enabled. |
 | `preview_auto_open` | `false` | Open the preview URL in the Packer host's default browser. Requires `preview = true`. If opening fails, prints a message and continues. |
 | `recording_path` | `""` | Save the screen to this local MJPEG AVI file; must end in `.avi`. Empty disables recording. Creates parent directories and refuses to overwrite an existing file. Relative paths use the Packer process's working directory. |
-| `frame_rate` | `5` | Preview and recording frames per second, from 1 to 60. |
+| `frame_rate` | `5` | Preview and recording frames per second, from 1 to 60. Also controls screen-update requests for mouse resize tracking when capture is disabled. |
 
 Packer's common provisioner options also apply, including `timeout`, `only`, `except`, and `pause_before`. Set `timeout` to bound the entire provisioner, including typing and waits. Zero and negative durations are invalid.
 
@@ -114,16 +114,35 @@ The preview adapts to desktop resolution changes. AVI retains the initial dimens
 
 ## Command semantics
 
-Commands use the Packer SDK parser, validator, and VNC driver. List boundaries add no spaces, newlines, waits, or modifier releases; even a token can span two strings. Supported expressions include:
+Keyboard commands use the Packer SDK parser, validator, and VNC driver; the plugin adds mouse expressions. List boundaries add no spaces, newlines, waits, or modifier releases; even a token can span two strings. Supported expressions include:
 
 - Literal text and special keys: `<enter>`, `<return>`, `<esc>`, `<tab>`, `<bs>`, `<del>`, `<spacebar>`, `<insert>`, `<home>`, `<end>`, `<menu>`, `<pageUp>`, `<pageDown>`, `<up>`, `<down>`, `<left>`, `<right>`, and `<f1>` through `<f12>`.
 - Modifiers: `<leftAlt>`, `<rightAlt>`, `<leftCtrl>`, `<rightCtrl>`, `<leftShift>`, `<rightShift>`, `<leftSuper>`, `<rightSuper>`, `<leftCommand>`, `<rightCommand>`, `<leftOption>`, and `<rightOption>`.
 - Holds and releases: `<leftCtrlOn>c<leftCtrlOff>` or `<aOn><wait1s><aOff>`. Explicitly release keys you hold; the plugin does not add releases.
 - Waits: `<wait>` (one second), `<wait5>`, `<wait10>`, or arbitrary positive durations such as `<wait300ms>`, `<wait2s>`, and `<wait1m20s>`.
+- Mouse clicks: `<click 400,300>` for the left button and `<rightClick 400,300>` for the right button. Each coordinate accepts integer pixels or a percentage, for example `<rightClick 50%,75%>` or `<click 400,75%>`. Mouse command names are case insensitive; whitespace around coordinates is optional.
 
-Special key names and On/Off suffixes are case insensitive; `wait` is lowercase. Unknown or malformed tokens can be treated as literal text by the SDK, so spelling matters. The SDK synthesizes Shift for uppercase letters and shifted punctuation. Text entry follows its key mapping; arbitrary Unicode and non-US guest layouts are not guaranteed.
+Special key names and On/Off suffixes are case insensitive; `wait` is lowercase. Unknown or malformed keyboard tokens can be treated as literal text by the SDK, so spelling matters. Recognized mouse commands with missing or invalid coordinates fail validation instead of being typed. The SDK synthesizes Shift for uppercase letters and shifted punctuation. Text entry follows its key mapping; arbitrary Unicode and non-US guest layouts are not guaranteed.
 
-This plugin does not implement OCR, mouse operations, endpoint discovery, SSH tunnels, or builder-specific extensions such as Tart's `<click 'text'>` and `<wait 'text'>`. Connect to a known, reachable VNC endpoint. It never automatically reconnects or replays commands after an error.
+### Mouse coordinates
+
+```hcl
+commands = [
+  "<wait10s>",
+  "<click 400,300>",
+  "<rightClick 50%,75%><wait1s><esc>",
+  "<leftCtrlOn><click 25%,50%><leftCtrlOff>",
+  "<wait2s>",
+]
+```
+
+Coordinates refer to the VNC server's framebuffer: `(0,0)` is the top-left, X increases rightward, and Y increases downward. They are independent of the preview's displayed size and macOS logical points. Pixel values must be integers from 0 to 65535 and fall within the current framebuffer. Percentages accept decimals from `0%` to `100%`; each axis maps with `round(percent / 100 * (dimension - 1))`, so `100%` targets the last pixel.
+
+Percentages resolve at the start of each click using the latest dimensions received from the server. DesktopSize updates are tracked even without preview or recording; mouse-only sessions discard pixel payloads without rendering images. Resize support depends on the server advertising changes, and a resize concurrent with a click can briefly make its coordinates stale. Percentage coordinates follow the framebuffer size, not UI elements that move independently.
+
+A click moves the pointer, presses the selected button, then releases it at the same coordinates, with `key_interval` after each event. Held keyboard modifiers remain active across clicks. On an interrupted button hold the plugin attempts a release, but delivery cannot be guaranteed after a disconnect. Mouse expressions support the same HCL and legacy JSON interpolation as other commands; malformed rendered coordinates fail before connecting. A bare `<rightClick>` requires coordinates and is invalid.
+
+This plugin does not implement OCR, dragging, scrolling, endpoint discovery, SSH tunnels, or builder-specific extensions such as Tart's `<click 'text'>` and `<wait 'text'>`. Connect to a known, reachable VNC endpoint. It never automatically reconnects or replays commands after an error.
 
 ## Protocol, authentication, and logging
 
@@ -150,7 +169,7 @@ Install [Mise](https://mise.jdx.dev/), then run `mise install`. Tool versions ar
 
 ## Local Tart integration
 
-Requires macOS on Apple Silicon, a cached stopped `macos-base` VM, SSH with password authentication, an unlocked graphical session for the SSH user, and working Screen Sharing configured on the base. The default guest credentials are `admin`/`admin`. The test opens a fresh Terminal session through LaunchServices and waits for it to start.
+Requires macOS on Apple Silicon, a cached stopped `macos-base` VM, SSH with password authentication, an unlocked graphical session for the SSH user, working Screen Sharing configured on the base, and Swift/AppKit development tools in the guest. The default guest credentials are `admin`/`admin`. The test opens a fresh Terminal session through LaunchServices and waits for it to start, then compiles a native window to verify mouse buttons.
 
 ```sh
 mise run integration:tart
@@ -162,15 +181,15 @@ TART_DEBUG_PAUSE=true mise run integration:tart
 TART_BASE_VM=another-cached-base TART_SSH_USERNAME=admin TART_SSH_PASSWORD=admin mise run integration:tart
 ```
 
-The task generates a unique test VM name and lets Packer clone the base. It opens a Tart window, keeps the display awake, retains Screen Sharing, and configures control privileges on the clone. By default it enables classic VNC password access; `TART_VNC_AUTH=apple` disables that access and authenticates with the SSH user's Mac account credentials. A shell step prepares Terminal; the VNC step waits ten seconds after connecting, types the marker command, then waits two seconds before disconnecting. The final shell step verifies exact marker bytes over SSH with a 30-second deadline. The task's trap deletes only its generated test VM. The base is unchanged. `TART_VNC_PASSWORD` overrides the classic VNC test password (default `vnctest`); it is a disposable test credential. This integration runs locally, without a dedicated CI runner.
+The task generates a unique test VM name and lets Packer clone the base. It opens a Tart window, keeps the display awake, retains Screen Sharing, and configures control privileges on the clone. By default it enables classic VNC password access; `TART_VNC_AUTH=apple` disables that access and authenticates with the SSH user's Mac account credentials. A shell step prepares Terminal; the VNC step waits ten seconds after connecting, types the marker command, then waits two seconds before disconnecting. A shell step verifies exact marker bytes over SSH with a 30-second deadline. A second VNC step sends pixel and percentage clicks to the native test window with capture disabled; SSH verifies the exact left/right button-down and button-up sequence. Both steps support a debugging breakpoint. The task's trap deletes only its generated test VM. The base is unchanged. `TART_VNC_PASSWORD` overrides the classic VNC test password (default `vnctest`); it is a disposable test credential. This integration runs locally, without a dedicated CI runner.
 
 ## Releases
 
 CI runs `mise run check` and `mise run release:snapshot` on pushes to `main` and pull requests. Before a release, also pass the local Tart integration and wait for CI on the exact commit. Then:
 
 ```sh
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 The tag workflow checks the code, builds and validates packaging before publication, and uses GoReleaser to publish ZIPs for Linux, macOS, and Windows on amd64/arm64. Packer API version comes from the built plugin's `describe` metadata. ZIPs and enclosed binaries follow `packer-plugin-vnc-commands_vVERSION_xAPI_OS_ARCH` (Windows binaries append `.exe`), with `packer-plugin-vnc-commands_vVERSION_SHA256SUMS` covering the archives. The workflow verifies the published release through `packer init`; run `mise run release:verify-install` locally too. For a manual release, set `GITHUB_TOKEN` and run `mise run release` from a clean tagged checkout.
