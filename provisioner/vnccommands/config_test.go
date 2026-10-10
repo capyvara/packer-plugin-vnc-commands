@@ -13,7 +13,7 @@ func TestPrepareDefaults(t *testing.T) {
 	if err := p.Prepare(map[string]interface{}{"host": "::1", "commands": []string{"hello", "<enter>"}}); err != nil {
 		t.Fatal(err)
 	}
-	if *p.config.Port != 5900 || p.config.Username != "" || p.config.Password != "" || *p.config.KeyInterval != 100*time.Millisecond || *p.config.ConnectTimeout != 30*time.Second {
+	if *p.config.Port != 5900 || p.config.Username != "" || p.config.Password != "" || *p.config.KeyInterval != 100*time.Millisecond || *p.config.ConnectTimeout != 30*time.Second || p.config.Preview || p.config.PreviewAutoOpen || p.config.RecordingPath != "" || *p.config.FrameRate != 5 {
 		t.Fatalf("unexpected defaults: %+v", p.config)
 	}
 }
@@ -38,6 +38,9 @@ func TestInvalidConfiguration(t *testing.T) {
 		{"timeout zero", "connect_timeout", "0s", "connect_timeout"},
 		{"timeout negative", "connect_timeout", "-1s", "connect_timeout"},
 		{"timeout invalid", "connect_timeout", "nope", "connect_timeout"},
+		{"frame rate zero", "frame_rate", 0, "frame_rate"},
+		{"frame rate too high", "frame_rate", 61, "frame_rate"},
+		{"auto open without preview", "preview_auto_open", true, "requires preview"},
 		{"invalid SDK wait", "commands", []string{"sensitive-text<wait0s>"}, "positive"},
 		{"unknown field", "typo", true, "unknown configuration"},
 		{"template syntax", "commands", []string{"sensitive-text{{"}, "commands"},
@@ -61,6 +64,7 @@ func TestRuntimeConfiguration(t *testing.T) {
 	err := p.Prepare(map[string]interface{}{
 		"host": "{{.Host}}", "username": "{{.Username}}", "password": "{{user `vnc_password`}}",
 		"commands":              []string{"{{user `prefix`}}", "{{.Name}}<enter>"},
+		"recording_path":        "artifacts/{{.Name}}.avi",
 		"packer_user_variables": map[string]string{"prefix": "hello ", "vnc_password": "secret"},
 	})
 	if err != nil {
@@ -70,7 +74,7 @@ func TestRuntimeConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Host != "::1" || c.Username != "admin" || c.Password != "secret" || strings.Join(c.Commands, "") != "hello guest<enter>" {
+	if c.Host != "::1" || c.Username != "admin" || c.Password != "secret" || strings.Join(c.Commands, "") != "hello guest<enter>" || c.RecordingPath != "artifacts/guest.avi" {
 		t.Fatalf("unexpected runtime values: %+v", c)
 	}
 	if p.config.Host != "{{.Host}}" || p.config.Username != "{{.Username}}" || p.config.Commands[1] != "{{.Name}}<enter>" {
@@ -118,5 +122,15 @@ func TestAppleCredentialValidationAfterInterpolation(t *testing.T) {
 				t.Fatalf("unexpected credential validation: %v", err)
 			}
 		})
+	}
+}
+
+func TestRecordingPathExtension(t *testing.T) {
+	p := new(Provisioner)
+	if err := p.Prepare(map[string]interface{}{"host": "localhost", "commands": []string{"a"}, "recording_path": "{{.Path}}"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.runtimeConfig(map[string]interface{}{"Path": "screen.mp4"}); err == nil || !strings.Contains(err.Error(), ".avi") {
+		t.Fatalf("unexpected recording format validation: %v", err)
 	}
 }

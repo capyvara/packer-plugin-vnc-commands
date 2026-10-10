@@ -30,10 +30,14 @@ The source deliberately omits `packer-plugin-`; the public repository is [capyva
 | `commands` | Required | Nonempty list of strings with nonempty combined text, concatenated without separators. |
 | `key_interval` | `"100ms"` | Positive Go duration between each key event, including key-down and key-up. |
 | `connect_timeout` | `"30s"` | Positive Go duration bounding TCP connection and the complete VNC handshake together. |
+| `preview` | `false` | Serve an observe-only browser preview on `127.0.0.1` at an automatically assigned port. Always prints its URL when enabled. |
+| `preview_auto_open` | `false` | Open the preview URL in the Packer host's default browser. Requires `preview = true`. If opening fails, prints a message and continues. |
+| `recording_path` | `""` | Save the screen to this local MJPEG AVI file; must end in `.avi`. Empty disables recording. Creates parent directories and refuses to overwrite an existing file. Relative paths use the Packer process's working directory. |
+| `frame_rate` | `5` | Preview and recording frames per second, from 1 to 60. |
 
 Packer's common provisioner options also apply, including `timeout`, `only`, `except`, and `pause_before`. Set `timeout` to bound the entire provisioner, including typing and waits. Zero and negative durations are invalid.
 
-HCL supports ordinary variables (`var.vnc_password`) and runtime builder values (`build.Host`). Packer prepares the provisioner again when builder values are available. Legacy JSON supports user expressions such as ``{{user `vnc_password`}}`` and runtime expressions such as `{{.Host}}` in `host`, `username`, `password`, and `commands`.
+HCL supports ordinary variables (`var.vnc_password`) and runtime builder values (`build.Host`). Packer prepares the provisioner again when builder values are available. Legacy JSON supports user expressions such as ``{{user `vnc_password`}}`` and runtime expressions such as `{{.Host}}` in `host`, `username`, `password`, `commands`, and `recording_path`.
 
 ## Between shell provisioners
 
@@ -81,6 +85,32 @@ provisioner "vnc-commands" {
 ```
 
 Declare the password variable with `sensitive = true`. Authentication does not prepare or focus the graphical session: keep the desired account logged in with the target application focused before typing. Supplying a username requires Apple authentication, even if the server also offers classic VNC or unauthenticated access. Omitting `username` preserves classic VNC password behavior. This is a local macOS account, not an Apple ID.
+
+## Screen preview and recording
+
+Enable either feature or both:
+
+```hcl
+provisioner "vnc-commands" {
+  host     = build.Host
+  username = var.macos_username
+  password = var.macos_password
+  commands = ["<wait10s>", "echo ready<enter>", "<wait2s>"]
+
+  preview           = true
+  preview_auto_open = false
+  recording_path    = "artifacts/vnc-session.avi"
+  frame_rate        = 5
+}
+```
+
+When `preview` is enabled, Packer prints `VNC preview (observe only): http://127.0.0.1:PORT/TOKEN/`, whether or not `preview_auto_open` is enabled. Open that URL on the machine running Packer. With `preview_auto_open = true`, the plugin also opens the default browser using `open` on macOS, `xdg-open` on Linux, or `rundll32.exe` on Windows. The preview has no keyboard, mouse, or clipboard input endpoint. Closing a viewer does not stop provisioning. Multiple viewers can connect; slow viewers do not block capture or typing. The relative `stream` URL serves multipart MJPEG for external consumers.
+
+Capture uses the existing shared VNC connection, so it adds no second login. It requests a full screen first, then incremental changed rectangles. Commands start after the first screen arrives; `connect_timeout` separately bounds that initial screen wait. The requested frame rate is a sampling target; available screen updates depend on the server and network. During static screens and waits, recording repeats the latest frame to preserve elapsed time. JPEG quality is 85, and recording needs no FFmpeg or guest software.
+
+Recording works with `preview = false`. Each AVI contains only this provisioner's execution, including its command waits; the file is indexed and closed on completion, error, timeout, and cancellation. Capture and recording failures fail the provisioner. Choose a distinct recording path for each step or run: existing files are never overwritten. Classic AVI files are limited to 4 GiB; reaching that limit fails the step and finalizes the frames already saved. No audio is captured.
+
+The preview adapts to desktop resolution changes. AVI retains the initial dimensions and fits resized screens into that frame with black borders. Capture accepts screens up to 16 megapixels and 16384 pixels per side. The preview server closes when the provisioner ends. Screen images can include anything visible in the guest, including text typed by the commands; treat preview URLs and recordings accordingly.
 
 ## Command semantics
 

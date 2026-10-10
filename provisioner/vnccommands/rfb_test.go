@@ -24,23 +24,33 @@ type keyEvent struct {
 }
 
 type rfbOptions struct {
-	username        string
-	password        string
-	securityTypes   []byte
-	appleKeyLength  int
-	stallApple      bool
-	failureReason   string
-	stall           bool
-	version         string
-	disconnectAfter int
+	username         string
+	password         string
+	securityTypes    []byte
+	appleKeyLength   int
+	stallApple       bool
+	failureReason    string
+	stall            bool
+	version          string
+	disconnectAfter  int
+	screen           bool
+	resizeScreen     bool
+	invalidRectangle bool
+	onlyFirstFrame   bool
+}
+
+type screenRequest struct {
+	incremental   bool
+	width, height uint16
 }
 
 type rfbServer struct {
-	host   string
-	port   int
-	events chan keyEvent
-	ready  chan struct{}
-	done   chan error
+	host     string
+	port     int
+	events   chan keyEvent
+	ready    chan struct{}
+	done     chan error
+	requests chan screenRequest
 }
 
 // A deliberately small RFB 3.8 server exercises the wire protocol rather
@@ -53,7 +63,7 @@ func startRFB(t *testing.T, options rfbOptions) *rfbServer {
 	}
 	host, port, _ := net.SplitHostPort(listener.Addr().String())
 	p, _ := strconv.Atoi(port)
-	s := &rfbServer{host: host, port: p, events: make(chan keyEvent, 1024), ready: make(chan struct{}), done: make(chan error, 1)}
+	s := &rfbServer{host: host, port: p, events: make(chan keyEvent, 1024), ready: make(chan struct{}), done: make(chan error, 1), requests: make(chan screenRequest, 1024)}
 	t.Cleanup(func() { listener.Close() })
 	go func() {
 		conn, err := listener.Accept()
@@ -185,28 +195,92 @@ func (s *rfbServer) serve(c net.Conn, options rfbOptions) error {
 	}
 	// 1x1 framebuffer, 32bpp true color, name "test".
 	init := []byte{0, 1, 0, 1, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0, 0, 0, 0, 4, 't', 'e', 's', 't'}
+	if options.screen {
+		binary.BigEndian.PutUint16(init[:2], 64)
+		binary.BigEndian.PutUint16(init[2:4], 32)
+	}
 	if _, err := c.Write(init); err != nil {
 		return err
 	}
 	close(s.ready)
-	count := 0
+	count, updates := 0, 0
 	for {
-		packet := make([]byte, 8)
-		if _, err := io.ReadFull(c, packet); err != nil {
+		var kind [1]byte
+		if _, err := io.ReadFull(c, kind[:]); err != nil {
 			if err == io.EOF {
 				return nil
 			}
 			return err
 		}
-		if packet[0] != 4 {
-			return fmt.Errorf("unexpected client message: %d", packet[0])
-		}
-		s.events <- keyEvent{binary.BigEndian.Uint32(packet[4:]), packet[1] == 1}
-		count++
-		if options.disconnectAfter > 0 && count == options.disconnectAfter {
-			return nil
+		switch kind[0] {
+		case 2:
+			var header [3]byte
+			if _, err := io.ReadFull(c, header[:]); err != nil {
+				return err
+			}
+			encodings := make([]byte, int(binary.BigEndian.Uint16(header[1:]))*4)
+			if _, err := io.ReadFull(c, encodings); err != nil {
+				return err
+			}
+		case 3:
+			var packet [9]byte
+			if _, err := io.ReadFull(c, packet[:]); err != nil {
+				return err
+			}
+			request := screenRequest{packet[0] == 1, binary.BigEndian.Uint16(packet[5:]), binary.BigEndian.Uint16(packet[7:])}
+			s.requests <- request
+			if options.screen {
+				updates++
+				if options.onlyFirstFrame && updates > 1 {
+					continue
+				}
+				if err := serveScreen(c, request, updates, options); err != nil {
+					return err
+				}
+			}
+		case 4:
+			var packet [7]byte
+			if _, err := io.ReadFull(c, packet[:]); err != nil {
+				return err
+			}
+			s.events <- keyEvent{binary.BigEndian.Uint32(packet[3:]), packet[0] == 1}
+			count++
+			if options.disconnectAfter > 0 && count == options.disconnectAfter {
+				return nil
+			}
+		default:
+			return fmt.Errorf("unexpected client message: %d", kind[0])
 		}
 	}
+}
+
+func serveScreen(c net.Conn, request screenRequest, count int, options rfbOptions) error {
+	var packet bytes.Buffer
+	packet.Write([]byte{0, 0, 0, 1}) // framebuffer update, one rectangle
+	x, y, width, height := uint16(0), uint16(0), request.width, request.height
+	encoding := int32(0)
+	pixel := []byte{0, 0, 255, 0} // red, native BGRX
+	if options.invalidRectangle {
+		x = request.width
+	} else if options.resizeScreen && count == 3 {
+		width, height, encoding = 32, 64, -223
+	} else if count == 2 {
+		width, height, pixel = 8, 8, []byte{0, 255, 0, 0}
+	} else if count > 3 {
+		pixel = []byte{255, 0, 0, 0}
+	}
+	for _, field := range []interface{}{x, y, width, height, encoding} {
+		if err := binary.Write(&packet, binary.BigEndian, field); err != nil {
+			return err
+		}
+	}
+	if encoding == 0 {
+		for i := 0; i < int(width)*int(height); i++ {
+			packet.Write(pixel)
+		}
+	}
+	_, err := c.Write(packet.Bytes())
+	return err
 }
 
 // Independently act as the Apple server: receive ciphertext followed by the

@@ -25,6 +25,10 @@ type FlatConfig struct {
 	Commands            []string          `mapstructure:"commands" required:"true" cty:"commands" hcl:"commands"`
 	KeyInterval         *string           `mapstructure:"key_interval" required:"false" cty:"key_interval" hcl:"key_interval"`
 	ConnectTimeout      *string           `mapstructure:"connect_timeout" required:"false" cty:"connect_timeout" hcl:"connect_timeout"`
+	Preview             *bool             `mapstructure:"preview" required:"false" cty:"preview" hcl:"preview"`
+	PreviewAutoOpen     *bool             `mapstructure:"preview_auto_open" required:"false" cty:"preview_auto_open" hcl:"preview_auto_open"`
+	RecordingPath       *string           `mapstructure:"recording_path" required:"false" cty:"recording_path" hcl:"recording_path"`
+	FrameRate           *int              `mapstructure:"frame_rate" required:"false" cty:"frame_rate" hcl:"frame_rate"`
 }
 
 // FlatMapstructure returns a new FlatConfig.
@@ -54,6 +58,10 @@ func (*FlatConfig) HCL2Spec() map[string]hcldec.Spec {
 		"commands":                   &hcldec.AttrSpec{Name: "commands", Type: cty.List(cty.String), Required: false},
 		"key_interval":               &hcldec.AttrSpec{Name: "key_interval", Type: cty.String, Required: false},
 		"connect_timeout":            &hcldec.AttrSpec{Name: "connect_timeout", Type: cty.String, Required: false},
+		"preview":                    &hcldec.AttrSpec{Name: "preview", Type: cty.Bool, Required: false},
+		"preview_auto_open":          &hcldec.AttrSpec{Name: "preview_auto_open", Type: cty.Bool, Required: false},
+		"recording_path":             &hcldec.AttrSpec{Name: "recording_path", Type: cty.String, Required: false},
+		"frame_rate":                 &hcldec.AttrSpec{Name: "frame_rate", Type: cty.Number, Required: false},
 	}
 	return s
 }

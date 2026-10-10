@@ -90,6 +90,10 @@ build {
     key_interval    = "100ms"
     connect_timeout = "30s"
     timeout         = "2m"
+
+    preview        = true
+    recording_path = "artifacts/${var.test_vm}.avi"
+    frame_rate     = 5
   }
 
   provisioner "shell" {

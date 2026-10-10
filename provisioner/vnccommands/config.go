@@ -3,6 +3,7 @@ package vnccommands
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,6 +24,10 @@ type Config struct {
 	Commands            []string       `mapstructure:"commands" required:"true"`
 	KeyInterval         *time.Duration `mapstructure:"key_interval" required:"false"`
 	ConnectTimeout      *time.Duration `mapstructure:"connect_timeout" required:"false"`
+	Preview             bool           `mapstructure:"preview" required:"false"`
+	PreviewAutoOpen     bool           `mapstructure:"preview_auto_open" required:"false"`
+	RecordingPath       string         `mapstructure:"recording_path" required:"false"`
+	FrameRate           *int           `mapstructure:"frame_rate" required:"false"`
 }
 
 func (p *Provisioner) Prepare(raws ...interface{}) error {
@@ -31,7 +36,7 @@ func (p *Provisioner) Prepare(raws ...interface{}) error {
 	// Defer these strings to Provision so JSON build values can be resolved.
 	if err := config.Decode(&p.config, &config.DecodeOpts{
 		Interpolate: true, InterpolateContext: &p.interp,
-		InterpolateFilter: &interpolate.RenderFilter{Exclude: []string{"host", "username", "password", "commands"}},
+		InterpolateFilter: &interpolate.RenderFilter{Exclude: []string{"host", "username", "password", "commands", "recording_path"}},
 	}, raws...); err != nil {
 		// SDK interpolation errors append the original field value after
 		// this delimiter. Preserve the diagnostic without echoing that value.
@@ -50,6 +55,10 @@ func (p *Provisioner) Prepare(raws ...interface{}) error {
 		port := 5900
 		p.config.Port = &port
 	}
+	if p.config.FrameRate == nil {
+		rate := 5
+		p.config.FrameRate = &rate
+	}
 	return p.config.validate()
 }
 
@@ -66,6 +75,12 @@ func (c *Config) validate() error {
 	}
 	if c.ConnectTimeout == nil || *c.ConnectTimeout <= 0 {
 		errs = append(errs, errors.New("connect_timeout must be a positive duration"))
+	}
+	if c.FrameRate == nil || *c.FrameRate < 1 || *c.FrameRate > 60 {
+		errs = append(errs, errors.New("frame_rate must be between 1 and 60"))
+	}
+	if c.PreviewAutoOpen && !c.Preview {
+		errs = append(errs, errors.New("preview_auto_open requires preview = true"))
 	}
 	if len(c.Commands) == 0 || strings.Join(c.Commands, "") == "" {
 		errs = append(errs, errors.New("commands must contain at least one nonempty command"))
@@ -89,7 +104,7 @@ func (p *Provisioner) runtimeConfig(data map[string]interface{}) (Config, error)
 	for _, field := range []struct {
 		name  string
 		value *string
-	}{{"host", &c.Host}, {"username", &c.Username}, {"password", &c.Password}} {
+	}{{"host", &c.Host}, {"username", &c.Username}, {"password", &c.Password}, {"recording_path", &c.RecordingPath}} {
 		*field.value, err = interpolate.Render(*field.value, &interp)
 		if err != nil {
 			return c, fmt.Errorf("could not interpolate VNC %s", field.name)
@@ -108,6 +123,9 @@ func (p *Provisioner) runtimeConfig(data map[string]interface{}) (Config, error)
 		if err := validateAppleCredentials(c.Username, c.Password); err != nil {
 			return c, err
 		}
+	}
+	if c.RecordingPath != "" && !strings.EqualFold(filepath.Ext(c.RecordingPath), ".avi") {
+		return c, errors.New("recording_path must end in .avi")
 	}
 	return c, c.validate()
 }

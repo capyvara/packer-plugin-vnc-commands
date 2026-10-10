@@ -45,6 +45,11 @@ build {
     key_interval    = "100ms"
     connect_timeout = "30s"
     timeout         = "2m"
+    # Preview and recording can be enabled independently.
+    preview           = false
+    preview_auto_open = false
+    recording_path    = "" # For example: "artifacts/vnc-session.avi"
+    frame_rate        = 5
   }
 
   provisioner "shell" {
